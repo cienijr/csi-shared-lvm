@@ -25,6 +25,7 @@ import (
 
 var (
 	controllerEndpoint   string
+	allowedVolumeGroups  []string
 	leaderElectionConfig = config.LeaderElectionConfiguration{
 		LeaseDuration:     metav1.Duration{Duration: 15 * time.Second},
 		RenewDeadline:     metav1.Duration{Duration: 10 * time.Second},
@@ -101,7 +102,7 @@ var controllerCmd = &cobra.Command{
 }
 
 func runServer() {
-	d := driver.NewDriver(controllerEndpoint)
+	d := driver.NewDriver(controllerEndpoint, allowedVolumeGroups)
 	s := server.New(d, d, nil)
 	if err := s.Run(controllerEndpoint); err != nil {
 		klog.Fatalf("error running server: %v", err)
@@ -111,6 +112,7 @@ func runServer() {
 func init() {
 	var fs flag.FlagSet
 	controllerCmd.PersistentFlags().StringVar(&controllerEndpoint, "endpoint", "unix:///tmp/csi.sock", "The endpoint for the CSI driver.")
+	controllerCmd.PersistentFlags().StringSliceVar(&allowedVolumeGroups, "allowed-volume-groups", allowedVolumeGroups, "A comma-separated list of volume groups that the driver is allowed to use. If not specified, all volume groups are allowed.")
 	options.BindLeaderElectionFlags(&leaderElectionConfig, controllerCmd.PersistentFlags())
 	ctrl.RegisterFlags(&fs)
 	controllerCmd.PersistentFlags().AddGoFlagSet(&fs)

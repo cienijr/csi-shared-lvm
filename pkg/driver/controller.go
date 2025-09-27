@@ -2,16 +2,96 @@ package driver
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
+
+	"github.com/cienijr/csi-shared-lvm/pkg/lvm"
+)
+
+const (
+	volumeGroupKey = "volumeGroup"
 )
 
 func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	klog.InfoS("CreateVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	lvName := req.Name
+	if lvName == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	if req.VolumeCapabilities == nil || len(req.VolumeCapabilities) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "volume capabilities are required")
+	}
+	if req.CapacityRange == nil {
+		return nil, status.Error(codes.InvalidArgument, "capacity range is required")
+	}
+
+	params := req.GetParameters()
+	vgName, ok := params[volumeGroupKey]
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "parameter '%s' is required", volumeGroupKey)
+	}
+
+	if len(d.allowedVolumeGroups) > 0 {
+		allowed := false
+		for _, vg := range d.allowedVolumeGroups {
+			if vg == vgName {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, status.Errorf(codes.InvalidArgument, "volume group '%s' is not allowed", vgName)
+		}
+	}
+
+	size := req.GetCapacityRange().GetRequiredBytes()
+
+	lv, err := lvm.GetLV(vgName, lvName)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get lv: %v", err)
+	}
+
+	if lv != nil {
+		// idempotency
+		if lv.Size >= size {
+			klog.InfoS("LV already exists and is large enough, returning success", "vg", vgName, "lv", lvName)
+			return &csi.CreateVolumeResponse{
+				Volume: &csi.Volume{
+					VolumeId:      fmt.Sprintf("%s/%s", vgName, lvName),
+					CapacityBytes: lv.Size,
+				},
+			}, nil
+		}
+		return nil, status.Errorf(codes.AlreadyExists, "lv '%s' already exists but with a different size", lvName)
+	}
+
+	klog.InfoS("Creating new LV", "vg", vgName, "lv", lvName, "size", size)
+	tags := []string{
+		lvm.OwnershipTag,
+	}
+	if err := lvm.CreateLV(vgName, lvName, size, tags); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create lv: %v", err)
+	}
+
+	// actual volume size may be higher than requested, since LVM rounds up to 4MiB sectors
+	actualLV, err := lvm.GetLV(vgName, lvName)
+	if err != nil || actualLV == nil {
+		return nil, status.Errorf(codes.Internal, "failed to get lv after creation: %v", err)
+	}
+
+	actualSize := actualLV.Size
+
+	return &csi.CreateVolumeResponse{
+		Volume: &csi.Volume{
+			VolumeId:      fmt.Sprintf("%s/%s", vgName, lvName),
+			CapacityBytes: actualSize,
+		},
+	}, nil
 }
 
 func (d *Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {

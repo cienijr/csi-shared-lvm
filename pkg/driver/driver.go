@@ -7,11 +7,13 @@ type Driver struct {
 	csi.UnimplementedControllerServer
 	csi.UnimplementedNodeServer
 
-	endpoint string
+	endpoint            string
+	allowedVolumeGroups []string
 }
 
-func NewDriver(endpoint string) *Driver {
+func NewDriver(endpoint string, allowedVolumeGroups []string) *Driver {
 	return &Driver{
-		endpoint: endpoint,
+		endpoint:            endpoint,
+		allowedVolumeGroups: allowedVolumeGroups,
 	}
 }
