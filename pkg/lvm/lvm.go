@@ -26,7 +26,18 @@ type LogicalVolume struct {
 	Tags []string
 }
 
-func CreateLV(vg, name string, size int64, tags []string) error {
+type LVM interface {
+	GetLV(vg, name string) (*LogicalVolume, error)
+	CreateLV(vg, name string, size int64, tags []string) error
+}
+
+type client struct{}
+
+func NewLVM() LVM {
+	return &client{}
+}
+
+func (c *client) CreateLV(vg, name string, size int64, tags []string) error {
 	args := []string{"--name", name, "--wipesignatures", "y", "--yes", "--size", fmt.Sprintf("%db", size), "--setautoactivation", "n"}
 	for _, tag := range tags {
 		args = append(args, "--addtag", tag)
@@ -41,7 +52,7 @@ func CreateLV(vg, name string, size int64, tags []string) error {
 	return nil
 }
 
-func GetLV(vg, name string) (*LogicalVolume, error) {
+func (c *client) GetLV(vg, name string) (*LogicalVolume, error) {
 	args := []string{"--noheadings", "--nosuffix", "--units", "b", "-o", "lv_name,lv_size,lv_tags", fmt.Sprintf("%s/%s", vg, name)}
 	cmd := exec.Command("lvs", args...)
 	var stdout, stderr bytes.Buffer

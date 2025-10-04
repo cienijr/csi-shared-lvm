@@ -16,10 +16,10 @@ import (
 	"k8s.io/component-base/config/options"
 	"k8s.io/component-base/config/validation"
 	"k8s.io/klog/v2"
-
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/cienijr/csi-shared-lvm/pkg/driver"
+	"github.com/cienijr/csi-shared-lvm/pkg/lvm"
 	"github.com/cienijr/csi-shared-lvm/pkg/server"
 )
 
@@ -102,7 +102,8 @@ var controllerCmd = &cobra.Command{
 }
 
 func runServer() {
-	d := driver.NewDriver(controllerEndpoint, allowedVolumeGroups)
+	lvmClient := lvm.NewLVM()
+	d := driver.NewDriver(controllerEndpoint, allowedVolumeGroups, lvmClient)
 	s := server.New(d, d, nil)
 	if err := s.Run(controllerEndpoint); err != nil {
 		klog.Fatalf("error running server: %v", err)

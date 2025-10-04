@@ -5,6 +5,7 @@ go 1.25
 require (
 	github.com/container-storage-interface/spec v1.11.0
 	github.com/spf13/cobra v1.10.1
+	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.75.0
 	k8s.io/apimachinery v0.34.0
 	k8s.io/client-go v0.34.0

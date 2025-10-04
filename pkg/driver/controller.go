@@ -51,7 +51,7 @@ func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest)
 
 	size := req.GetCapacityRange().GetRequiredBytes()
 
-	lv, err := lvm.GetLV(vgName, lvName)
+	lv, err := d.lvm.GetLV(vgName, lvName)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get lv: %v", err)
 	}
@@ -74,12 +74,12 @@ func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest)
 	tags := []string{
 		lvm.OwnershipTag,
 	}
-	if err := lvm.CreateLV(vgName, lvName, size, tags); err != nil {
+	if err := d.lvm.CreateLV(vgName, lvName, size, tags); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create lv: %v", err)
 	}
 
 	// actual volume size may be higher than requested, since LVM rounds up to 4MiB sectors
-	actualLV, err := lvm.GetLV(vgName, lvName)
+	actualLV, err := d.lvm.GetLV(vgName, lvName)
 	if err != nil || actualLV == nil {
 		return nil, status.Errorf(codes.Internal, "failed to get lv after creation: %v", err)
 	}
