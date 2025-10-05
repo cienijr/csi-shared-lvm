@@ -102,7 +102,7 @@ var controllerCmd = &cobra.Command{
 }
 
 func runServer() {
-	lvmClient := lvm.NewLVM()
+	lvmClient := lvm.NewLVM(lvm.NewRealExecutor())
 	d := driver.NewDriver(controllerEndpoint, allowedVolumeGroups, lvmClient)
 	s := server.New(d, d, nil)
 	if err := s.Run(controllerEndpoint); err != nil {
