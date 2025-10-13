@@ -18,7 +18,7 @@ var nodeCmd = &cobra.Command{
 	Short: "Runs the CSI node plugin",
 	Long:  `Runs the CSI node plugin.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		lvmClient := lvm.NewLVM(lvm.NewRealExecutor())
+		lvmClient := lvm.NewLVM()
 		d := driver.NewDriver(nodeEndpoint, nil, lvmClient)
 		s := server.New(d, nil, d)
 		if err := s.Run(nodeEndpoint); err != nil {
