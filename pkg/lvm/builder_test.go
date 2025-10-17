@@ -71,3 +71,29 @@ func TestBuildLvsCmd(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildLvremoveCmd(t *testing.T) {
+	tests := []struct {
+		name         string
+		vg           string
+		lv           string
+		expectedCmd  string
+		expectedArgs []string
+	}{
+		{
+			name:         "should delete lv successfully",
+			vg:           "test-vg",
+			lv:           "test-lv",
+			expectedCmd:  "lvremove",
+			expectedArgs: strings.Fields("-f test-vg/test-lv"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, args := buildLvremoveCmd(tt.vg, tt.lv)
+			assert.Equal(t, tt.expectedCmd, cmd)
+			assert.Equal(t, tt.expectedArgs, args)
+		})
+	}
+}

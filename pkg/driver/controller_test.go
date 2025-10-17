@@ -16,6 +16,7 @@ import (
 type mockLVM struct {
 	getLV    func(vg, name string) (*lvm.LogicalVolume, error)
 	createLV func(vg, name string, size int64, tags []string) error
+	deleteLV func(vg, name string) error
 }
 
 func (m *mockLVM) GetLV(vg, name string) (*lvm.LogicalVolume, error) {
@@ -24,6 +25,10 @@ func (m *mockLVM) GetLV(vg, name string) (*lvm.LogicalVolume, error) {
 
 func (m *mockLVM) CreateLV(vg, name string, size int64, tags []string) error {
 	return m.createLV(vg, name, size, tags)
+}
+
+func (m *mockLVM) DeleteLV(vg, name string) error {
+	return m.deleteLV(vg, name)
 }
 
 func TestCreateVolume(t *testing.T) {
@@ -256,6 +261,74 @@ func TestCreateVolume(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			driver := NewDriver("test-endpoint", tt.allowedVGs, tt.mockLVM)
 			_, err := driver.CreateVolume(context.Background(), tt.req)
+			if tt.expectedErr == codes.OK {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedErr, st.Code())
+			}
+		})
+	}
+}
+
+func TestDeleteVolume(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         *csi.DeleteVolumeRequest
+		mockLVM     *mockLVM
+		expectedErr codes.Code
+	}{
+		{
+			name: "should delete volume successfully",
+			req: &csi.DeleteVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+			},
+			mockLVM: &mockLVM{
+				deleteLV: func(vg, name string) error {
+					return nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should return success if volume not found",
+			req: &csi.DeleteVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+			},
+			mockLVM: &mockLVM{
+				deleteLV: func(vg, name string) error {
+					return fmt.Errorf("not found")
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should fail on invalid volume id",
+			req: &csi.DeleteVolumeRequest{
+				VolumeId: "invalid-id",
+			},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should fail on internal error",
+			req: &csi.DeleteVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+			},
+			mockLVM: &mockLVM{
+				deleteLV: func(vg, name string) error {
+					return fmt.Errorf("some other error")
+				},
+			},
+			expectedErr: codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
+			_, err := driver.DeleteVolume(context.Background(), tt.req)
 			if tt.expectedErr == codes.OK {
 				assert.NoError(t, err)
 			} else {

@@ -13,6 +13,7 @@ const (
 type LVM interface {
 	GetLV(vg, name string) (*LogicalVolume, error)
 	CreateLV(vg, name string, size int64, tags []string) error
+	DeleteLV(vg, name string) error
 }
 type client struct {
 }
@@ -40,4 +41,15 @@ func (c *client) GetLV(vg, name string) (*LogicalVolume, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	return parseLvsOutput(vg, stdout.String(), stderr.String(), err)
+}
+
+func (c *client) DeleteLV(vg, name string) error {
+	command, args := buildLvremoveCmd(vg, name)
+	cmd := exec.Command(command, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to delete lv: %v, stderr: %s", err, stderr.String())
+	}
+	return nil
 }

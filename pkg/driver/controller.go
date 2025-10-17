@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -96,7 +97,28 @@ func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest)
 
 func (d *Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
 	klog.InfoS("DeleteVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+
+	parts := strings.Split(req.VolumeId, "/")
+	if len(parts) != 2 {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	}
+	vgName, lvName := parts[0], parts[1]
+
+	if err := d.lvm.DeleteLV(vgName, lvName); err != nil {
+		// idempotency
+		if strings.Contains(err.Error(), "not found") {
+			klog.InfoS("LV not found, assuming it's already deleted", "vg", vgName, "lv", lvName)
+			return &csi.DeleteVolumeResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "failed to delete lv: %v", err)
+	}
+
+	klog.InfoS("LV deleted successfully", "vg", vgName, "lv", lvName)
+	return &csi.DeleteVolumeResponse{}, nil
 }
 
 func (d *Driver) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
@@ -126,7 +148,17 @@ func (d *Driver) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (
 
 func (d *Driver) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
 	klog.InfoS("ControllerGetCapabilities called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+	return &csi.ControllerGetCapabilitiesResponse{
+		Capabilities: []*csi.ControllerServiceCapability{
+			{
+				Type: &csi.ControllerServiceCapability_Rpc{
+					Rpc: &csi.ControllerServiceCapability_RPC{
+						Type: csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+					},
+				},
+			},
+		},
+	}, nil
 }
 
 func (d *Driver) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {

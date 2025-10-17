@@ -15,3 +15,8 @@ func buildLvsCmd(vg, name string) (string, []string) {
 	args := []string{"--noheadings", "--nosuffix", "--units", "b", "-o", "lv_name,lv_size,lv_tags", fmt.Sprintf("%s/%s", vg, name)}
 	return "lvs", args
 }
+
+func buildLvremoveCmd(vg, name string) (string, []string) {
+	args := []string{"-f", fmt.Sprintf("%s/%s", vg, name)}
+	return "lvremove", args
+}
