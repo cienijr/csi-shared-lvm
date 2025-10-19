@@ -97,3 +97,31 @@ func TestBuildLvremoveCmd(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildLvextendCmd(t *testing.T) {
+	tests := []struct {
+		name         string
+		vg           string
+		lv           string
+		size         int64
+		expectedCmd  string
+		expectedArgs []string
+	}{
+		{
+			name:         "should resize lv successfully",
+			vg:           "test-vg",
+			lv:           "test-lv",
+			size:         2147483648,
+			expectedCmd:  "lvextend",
+			expectedArgs: strings.Fields("-L 2147483648b test-vg/test-lv"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, args := buildLvextendCmd(tt.vg, tt.lv, tt.size)
+			assert.Equal(t, tt.expectedCmd, cmd)
+			assert.Equal(t, tt.expectedArgs, args)
+		})
+	}
+}

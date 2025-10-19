@@ -157,6 +157,13 @@ func (d *Driver) ControllerGetCapabilities(ctx context.Context, req *csi.Control
 					},
 				},
 			},
+			{
+				Type: &csi.ControllerServiceCapability_Rpc{
+					Rpc: &csi.ControllerServiceCapability_RPC{
+						Type: csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
+					},
+				},
+			},
 		},
 	}, nil
 }
@@ -178,7 +185,53 @@ func (d *Driver) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsReques
 
 func (d *Driver) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
 	klog.InfoS("ControllerExpandVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.CapacityRange == nil {
+		return nil, status.Error(codes.InvalidArgument, "capacity range is required")
+	}
+
+	parts := strings.Split(req.VolumeId, "/")
+	if len(parts) != 2 {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	}
+	vgName, lvName := parts[0], parts[1]
+
+	lv, err := d.lvm.GetLV(vgName, lvName)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get lv: %v", err)
+	}
+	if lv == nil {
+		return nil, status.Errorf(codes.NotFound, "volume '%s' not found", req.VolumeId)
+	}
+
+	size := req.GetCapacityRange().GetRequiredBytes()
+
+	if lv.Size >= size {
+		klog.InfoS("LV is already large enough, returning success", "vg", vgName, "lv", lvName)
+		return &csi.ControllerExpandVolumeResponse{
+			CapacityBytes: lv.Size,
+		}, nil
+	}
+
+	klog.InfoS("Resizing LV", "vg", vgName, "lv", lvName, "size", size)
+	if err := d.lvm.ResizeLV(vgName, lvName, size); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resize lv: %v", err)
+	}
+
+	// actual volume size may be higher than requested, since LVM rounds up to 4MiB sectors
+	resizedLV, err := d.lvm.GetLV(vgName, lvName)
+	if err != nil || resizedLV == nil {
+		return nil, status.Errorf(codes.Internal, "failed to get lv after resize: %v", err)
+	}
+
+	actualSize := resizedLV.Size
+
+	return &csi.ControllerExpandVolumeResponse{
+		CapacityBytes: actualSize,
+	}, nil
 }
 
 func (d *Driver) ControllerGetVolume(ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {

@@ -20,3 +20,8 @@ func buildLvremoveCmd(vg, name string) (string, []string) {
 	args := []string{"-f", fmt.Sprintf("%s/%s", vg, name)}
 	return "lvremove", args
 }
+
+func buildLvextendCmd(vg, name string, size int64) (string, []string) {
+	args := []string{"-L", fmt.Sprintf("%db", size), fmt.Sprintf("%s/%s", vg, name)}
+	return "lvextend", args
+}

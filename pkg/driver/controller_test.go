@@ -17,6 +17,7 @@ type mockLVM struct {
 	getLV    func(vg, name string) (*lvm.LogicalVolume, error)
 	createLV func(vg, name string, size int64, tags []string) error
 	deleteLV func(vg, name string) error
+	resizeLV func(vg, name string, size int64) error
 }
 
 func (m *mockLVM) GetLV(vg, name string) (*lvm.LogicalVolume, error) {
@@ -29,6 +30,10 @@ func (m *mockLVM) CreateLV(vg, name string, size int64, tags []string) error {
 
 func (m *mockLVM) DeleteLV(vg, name string) error {
 	return m.deleteLV(vg, name)
+}
+
+func (m *mockLVM) ResizeLV(vg, name string, size int64) error {
+	return m.resizeLV(vg, name, size)
 }
 
 func TestCreateVolume(t *testing.T) {
@@ -329,6 +334,143 @@ func TestDeleteVolume(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
 			_, err := driver.DeleteVolume(context.Background(), tt.req)
+			if tt.expectedErr == codes.OK {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedErr, st.Code())
+			}
+		})
+	}
+}
+
+func TestControllerExpandVolume(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         *csi.ControllerExpandVolumeRequest
+		mockLVM     *mockLVM
+		expectedErr codes.Code
+	}{
+		{
+			name: "should expand volume successfully",
+			req: &csi.ControllerExpandVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 2 * 1024 * 1024 * 1024,
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Size: 1024 * 1024 * 1024,
+					}, nil
+				},
+				resizeLV: func(vg, name string, size int64) error {
+					return nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should return success if volume is already large enough",
+			req: &csi.ControllerExpandVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 1024 * 1024 * 1024,
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Size: 2 * 1024 * 1024 * 1024,
+					}, nil
+				},
+				resizeLV: func(vg, name string, size int64) error {
+					assert.Fail(t, "resizeLV should not have been called")
+					return nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should fail if volume not found",
+			req: &csi.ControllerExpandVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 2 * 1024 * 1024 * 1024,
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return nil, nil
+				},
+				resizeLV: func(vg, name string, size int64) error {
+					assert.Fail(t, "resizeLV should not have been called")
+					return nil
+				},
+			},
+			expectedErr: codes.NotFound,
+		},
+		{
+			name: "should fail on invalid volume id",
+			req: &csi.ControllerExpandVolumeRequest{
+				VolumeId: "invalid-id",
+			},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should fail on internal error on get lv",
+			req: &csi.ControllerExpandVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 2 * 1024 * 1024 * 1024,
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return nil, fmt.Errorf("some error")
+				},
+				resizeLV: func(vg, name string, size int64) error {
+					assert.Fail(t, "resizeLV should not have been called")
+					return nil
+				},
+			},
+			expectedErr: codes.Internal,
+		},
+		{
+			name: "should fail on internal error on resize lv",
+			req: &csi.ControllerExpandVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+				CapacityRange: &csi.CapacityRange{
+					RequiredBytes: 2 * 1024 * 1024 * 1024,
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Size: 1024 * 1024 * 1024,
+					}, nil
+				},
+				resizeLV: func(vg, name string, size int64) error {
+					return fmt.Errorf("some other error")
+				},
+			},
+			expectedErr: codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
+			_, err := driver.ControllerExpandVolume(context.Background(), tt.req)
 			if tt.expectedErr == codes.OK {
 				assert.NoError(t, err)
 			} else {
