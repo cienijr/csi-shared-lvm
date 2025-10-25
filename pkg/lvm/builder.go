@@ -12,7 +12,7 @@ func buildLvcreateCmd(vg, name string, size int64, tags []string) (string, []str
 }
 
 func buildLvsCmd(vg, name string) (string, []string) {
-	args := []string{"--noheadings", "--nosuffix", "--units", "b", "-o", "lv_name,lv_size,lv_tags", fmt.Sprintf("%s/%s", vg, name)}
+	args := []string{"--noheadings", "--nosuffix", "--units", "b", "-o", "lv_name,lv_size,lv_attr,lv_tags", fmt.Sprintf("%s/%s", vg, name)}
 	return "lvs", args
 }
 
@@ -24,4 +24,14 @@ func buildLvremoveCmd(vg, name string) (string, []string) {
 func buildLvextendCmd(vg, name string, size int64) (string, []string) {
 	args := []string{"-L", fmt.Sprintf("%db", size), fmt.Sprintf("%s/%s", vg, name)}
 	return "lvextend", args
+}
+
+func buildLvchangeActivateCmd(vg, name string) (string, []string) {
+	args := []string{"-ay", fmt.Sprintf("%s/%s", vg, name)}
+	return "lvchange", args
+}
+
+func buildLvchangeDeactivateCmd(vg, name string) (string, []string) {
+	args := []string{"-an", fmt.Sprintf("%s/%s", vg, name)}
+	return "lvchange", args
 }

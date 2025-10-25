@@ -5,4 +5,5 @@ type LogicalVolume struct {
 	VG   string
 	Size int64
 	Tags []string
+	Attr string
 }

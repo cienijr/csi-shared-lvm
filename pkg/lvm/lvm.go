@@ -15,6 +15,8 @@ type LVM interface {
 	CreateLV(vg, name string, size int64, tags []string) error
 	DeleteLV(vg, name string) error
 	ResizeLV(vg, name string, size int64) error
+	ActivateLV(vg, name string) error
+	DeactivateLV(vg, name string) error
 }
 type client struct {
 }
@@ -62,6 +64,28 @@ func (c *client) ResizeLV(vg, name string, size int64) error {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to resize lv: %v, stderr: %s", err, stderr.String())
+	}
+	return nil
+}
+
+func (c *client) ActivateLV(vg, name string) error {
+	command, args := buildLvchangeActivateCmd(vg, name)
+	cmd := exec.Command(command, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to activate lv: %v, stderr: %s", err, stderr.String())
+	}
+	return nil
+}
+
+func (c *client) DeactivateLV(vg, name string) error {
+	command, args := buildLvchangeDeactivateCmd(vg, name)
+	cmd := exec.Command(command, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to deactivate lv: %v, stderr: %s", err, stderr.String())
 	}
 	return nil
 }

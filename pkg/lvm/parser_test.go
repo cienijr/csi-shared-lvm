@@ -32,12 +32,36 @@ func TestParseLVSOutput(t *testing.T) {
 		{
 			name:   "should parse lvs output successfully",
 			vg:     "test-vg",
-			stdout: "  test-lv 1073741824B test-tag",
+			stdout: "  test-lv 1073741824B -wi-a----- test-tag",
 			expectedLV: &LogicalVolume{
 				Name: "test-lv",
 				VG:   "test-vg",
 				Size: 1073741824,
 				Tags: []string{"test-tag"},
+				Attr: "-wi-a-----",
+			},
+		},
+		{
+			name:   "should parse lvs output successfully with multiple tags",
+			vg:     "test-vg",
+			stdout: "  test-lv 1073741824B -wi------- test-tag,test-tag2,test-tag3",
+			expectedLV: &LogicalVolume{
+				Name: "test-lv",
+				VG:   "test-vg",
+				Size: 1073741824,
+				Tags: []string{"test-tag", "test-tag2", "test-tag3"},
+				Attr: "-wi-------",
+			},
+		},
+		{
+			name:   "should parse lvs output successfully with no tags",
+			vg:     "test-vg",
+			stdout: "  test-lv 1073741824B -wi-ao----",
+			expectedLV: &LogicalVolume{
+				Name: "test-lv",
+				VG:   "test-vg",
+				Size: 1073741824,
+				Attr: "-wi-ao----",
 			},
 		},
 		{

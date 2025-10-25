@@ -59,7 +59,7 @@ func TestBuildLvsCmd(t *testing.T) {
 			vg:           "test-vg",
 			lv:           "test-lv",
 			expectedCmd:  "lvs",
-			expectedArgs: strings.Fields("--noheadings --nosuffix --units b -o lv_name,lv_size,lv_tags test-vg/test-lv"),
+			expectedArgs: strings.Fields("--noheadings --nosuffix --units b -o lv_name,lv_size,lv_attr,lv_tags test-vg/test-lv"),
 		},
 	}
 
@@ -120,6 +120,58 @@ func TestBuildLvextendCmd(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, args := buildLvextendCmd(tt.vg, tt.lv, tt.size)
+			assert.Equal(t, tt.expectedCmd, cmd)
+			assert.Equal(t, tt.expectedArgs, args)
+		})
+	}
+}
+
+func TestBuildLvchangeActivateCmd(t *testing.T) {
+	tests := []struct {
+		name         string
+		vg           string
+		lv           string
+		expectedCmd  string
+		expectedArgs []string
+	}{
+		{
+			name:         "should activate lv successfully",
+			vg:           "test-vg",
+			lv:           "test-lv",
+			expectedCmd:  "lvchange",
+			expectedArgs: strings.Fields("-ay test-vg/test-lv"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, args := buildLvchangeActivateCmd(tt.vg, tt.lv)
+			assert.Equal(t, tt.expectedCmd, cmd)
+			assert.Equal(t, tt.expectedArgs, args)
+		})
+	}
+}
+
+func TestBuildLvchangeDeactivateCmd(t *testing.T) {
+	tests := []struct {
+		name         string
+		vg           string
+		lv           string
+		expectedCmd  string
+		expectedArgs []string
+	}{
+		{
+			name:         "should deactivate lv successfully",
+			vg:           "test-vg",
+			lv:           "test-lv",
+			expectedCmd:  "lvchange",
+			expectedArgs: strings.Fields("-an test-vg/test-lv"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, args := buildLvchangeDeactivateCmd(tt.vg, tt.lv)
 			assert.Equal(t, tt.expectedCmd, cmd)
 			assert.Equal(t, tt.expectedArgs, args)
 		})

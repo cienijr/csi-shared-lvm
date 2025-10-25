@@ -33,7 +33,7 @@ func parseLvsOutput(vg, stdout, stderr string, err error) (*LogicalVolume, error
 	}
 
 	fields := strings.Fields(output)
-	if len(fields) < 2 {
+	if len(fields) < 3 {
 		return nil, fmt.Errorf("failed to parse lvs output: %s", output)
 	}
 
@@ -43,8 +43,8 @@ func parseLvsOutput(vg, stdout, stderr string, err error) (*LogicalVolume, error
 	}
 
 	var tags []string
-	if len(fields) > 2 {
-		tags = strings.Split(fields[2], ",")
+	if len(fields) > 3 {
+		tags = strings.Split(fields[3], ",")
 	}
 
 	return &LogicalVolume{
@@ -52,6 +52,7 @@ func parseLvsOutput(vg, stdout, stderr string, err error) (*LogicalVolume, error
 		VG:   vg,
 		Size: size,
 		Tags: tags,
+		Attr: fields[2],
 	}, nil
 }
 
