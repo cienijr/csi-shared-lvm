@@ -109,3 +109,30 @@ func TestParseLVSOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestParseAttr(t *testing.T) {
+	tests := []struct {
+		name     string
+		attrs    []Attr
+		isActive bool
+	}{
+		{
+			name:     "should parse isActive true",
+			attrs:    []Attr{"-wi-a-----", "-wi-ao----", "----a-----"}, // 5th bit = a
+			isActive: true,
+		},
+		{
+			name:     "should parse isActive false",
+			attrs:    []Attr{"-wi-------", "-wi-h----", "-w--s-----"}, // 5th bit != a
+			isActive: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for attr := range tt.attrs {
+				assert.Equal(t, tt.isActive, tt.attrs[attr].IsActive())
+			}
+		})
+	}
+}

@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -11,7 +12,43 @@ import (
 
 func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	klog.InfoS("NodeStageVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.StagingTargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "staging target path is required")
+	}
+	if req.VolumeCapability == nil {
+		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
+	}
+
+	parts := strings.Split(req.VolumeId, "/")
+	if len(parts) != 2 {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	}
+	vgName, lvName := parts[0], parts[1]
+
+	// check if the volume is already staged
+	lv, err := d.lvm.GetLV(vgName, lvName)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get lv: %v", err)
+	}
+	if lv == nil {
+		return nil, status.Errorf(codes.NotFound, "volume '%s' not found", req.VolumeId)
+	}
+
+	if lv.Attr.IsActive() {
+		klog.InfoS("Volume is already active", "vg", vgName, "lv", lvName)
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
+	klog.InfoS("Activating LV", "vg", vgName, "lv", lvName)
+	if err := d.lvm.ActivateLV(vgName, lvName); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to activate lv: %v", err)
+	}
+
+	return &csi.NodeStageVolumeResponse{}, nil
 }
 
 func (d *Driver) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {

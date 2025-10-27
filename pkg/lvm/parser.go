@@ -52,7 +52,7 @@ func parseLvsOutput(vg, stdout, stderr string, err error) (*LogicalVolume, error
 		VG:   vg,
 		Size: size,
 		Tags: tags,
-		Attr: fields[2],
+		Attr: Attr(fields[2]),
 	}, nil
 }
 
