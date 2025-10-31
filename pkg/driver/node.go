@@ -53,7 +53,42 @@ func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRe
 
 func (d *Driver) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
 	klog.InfoS("NodeUnstageVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.StagingTargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "staging target path is required")
+	}
+
+	parts := strings.Split(req.VolumeId, "/")
+	if len(parts) != 2 {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	}
+	vgName, lvName := parts[0], parts[1]
+
+	// check if the volume was already deactivated
+	lv, err := d.lvm.GetLV(vgName, lvName)
+	if lv == nil && err == nil {
+		// either the vg or the lv are gone - anyways, there's nothing to unstage, so we return success
+		klog.InfoS("LV not found, assuming it's already unstaged", "vg", vgName, "lv", lvName)
+		return &csi.NodeUnstageVolumeResponse{}, nil
+
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get lv: %v", err)
+	}
+	if !lv.Attr.IsActive() {
+		klog.InfoS("Volume is already inactive", "vg", vgName, "lv", lvName)
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
+
+	klog.InfoS("Deactivating LV", "vg", vgName, "lv", lvName)
+	if err := d.lvm.DeactivateLV(vgName, lvName); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to deactivate lv: %v", err)
+	}
+
+	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
 func (d *Driver) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
@@ -78,7 +113,17 @@ func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolume
 
 func (d *Driver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
 	klog.InfoS("NodeGetCapabilities called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+	return &csi.NodeGetCapabilitiesResponse{
+		Capabilities: []*csi.NodeServiceCapability{
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+					},
+				},
+			},
+		},
+	}, nil
 }
 
 func (d *Driver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {

@@ -157,3 +157,123 @@ func TestNodeStageVolume(t *testing.T) {
 		})
 	}
 }
+
+func TestNodeUnstageVolume(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         *csi.NodeUnstageVolumeRequest
+		mockLVM     *mockLVM
+		expectedErr codes.Code
+	}{
+		{
+			name: "should unstage volume successfully",
+			req: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Attr: "-wi-a-----",
+					}, nil
+				},
+				deactivateLV: func(vg, name string) error {
+					return nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should return success if volume already unstaged",
+			req: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Attr: "-wi-------",
+					}, nil
+				},
+				deactivateLV: func(vg, name string) error {
+					assert.Fail(t, "deactivateLV should not have been called")
+					return nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should return success if volume not found",
+			req: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return nil, nil
+				},
+				deactivateLV: func(vg, name string) error {
+					assert.Fail(t, "deactivateLV should not have been called")
+					return nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should fail on internal error on get lv",
+			req: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return nil, fmt.Errorf("some other error")
+				},
+				deactivateLV: func(vg, name string) error {
+					assert.Fail(t, "deactivateLV should not have been called")
+					return nil
+				},
+			},
+			expectedErr: codes.Internal,
+		},
+		{
+			name: "should fail on internal error on deactivate lv",
+			req: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Attr: "-wi-a-----",
+					}, nil
+				},
+				deactivateLV: func(vg, name string) error {
+					return fmt.Errorf("some other error")
+				},
+			},
+			expectedErr: codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
+			_, err := driver.NodeUnstageVolume(context.Background(), tt.req)
+			if tt.expectedErr == codes.OK {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedErr, st.Code())
+			}
+		})
+	}
+}
