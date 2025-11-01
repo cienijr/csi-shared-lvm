@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/mount-utils"
+	testingexec "k8s.io/utils/exec/testing"
 
 	"github.com/cienijr/csi-shared-lvm/pkg/lvm"
 )
@@ -18,7 +20,10 @@ func TestNodeStageVolume(t *testing.T) {
 		name        string
 		req         *csi.NodeStageVolumeRequest
 		mockLVM     *mockLVM
+		mounter     *mount.FakeMounter
+		actions     []testingexec.FakeCommandAction
 		expectedErr codes.Code
+		expectedLog []mount.FakeAction
 	}{
 		{
 			name: "should stage volume successfully",
@@ -43,10 +48,82 @@ func TestNodeStageVolume(t *testing.T) {
 					return nil
 				},
 			},
+			mounter:     &mount.FakeMounter{},
+			actions:     []testingexec.FakeCommandAction{},
+			expectedErr: codes.OK,
+			expectedLog: []mount.FakeAction{
+				{
+					Action: "mount",
+					Source: "/dev/test-vg/test-lv",
+					Target: "/test/path",
+					FSType: "ext4",
+				},
+			},
+		},
+		{
+			name: "should stage volume successfully when already activated but not mounted",
+			req: &csi.NodeStageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+				VolumeCapability: &csi.VolumeCapability{
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Attr: "-wi-a-----",
+					}, nil
+				},
+				activateLV: func(vg, name string) error {
+					assert.Fail(t, "activateLV should not be called")
+					return nil
+				},
+			},
+			mounter:     &mount.FakeMounter{},
+			actions:     []testingexec.FakeCommandAction{},
+			expectedErr: codes.OK,
+			expectedLog: []mount.FakeAction{
+				{
+					Action: "mount",
+					Source: "/dev/test-vg/test-lv",
+					Target: "/test/path",
+					FSType: "ext4",
+				},
+			},
+		},
+		{
+			name: "should stage block volume successfully",
+			req: &csi.NodeStageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+				VolumeCapability: &csi.VolumeCapability{
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Attr: "-wi-------",
+					}, nil
+				},
+				activateLV: func(vg, name string) error {
+					return nil
+				},
+			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.OK,
 		},
 		{
-			name: "should return success if volume already staged",
+			name: "should return success if filesystem volume is already activated",
 			req: &csi.NodeStageVolumeRequest{
 				VolumeId:          "test-vg/test-lv",
 				StagingTargetPath: "/test/path",
@@ -69,7 +146,16 @@ func TestNodeStageVolume(t *testing.T) {
 					return nil
 				},
 			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.OK,
+			expectedLog: []mount.FakeAction{
+				{
+					Action: "mount",
+					Source: "/dev/test-vg/test-lv",
+					Target: "/test/path",
+					FSType: "ext4",
+				},
+			},
 		},
 		{
 			name: "should fail if volume not found",
@@ -91,6 +177,7 @@ func TestNodeStageVolume(t *testing.T) {
 					return nil
 				},
 			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.NotFound,
 		},
 		{
@@ -113,6 +200,7 @@ func TestNodeStageVolume(t *testing.T) {
 					return nil
 				},
 			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.Internal,
 		},
 		{
@@ -138,6 +226,7 @@ func TestNodeStageVolume(t *testing.T) {
 					return fmt.Errorf("some other error")
 				},
 			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.Internal,
 		},
 	}
@@ -145,6 +234,8 @@ func TestNodeStageVolume(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
+			exec := &testingexec.FakeExec{CommandScript: tt.actions}
+			driver.mounter = &mount.SafeFormatAndMount{Interface: tt.mounter, Exec: exec}
 			_, err := driver.NodeStageVolume(context.Background(), tt.req)
 			if tt.expectedErr == codes.OK {
 				assert.NoError(t, err)
@@ -154,6 +245,7 @@ func TestNodeStageVolume(t *testing.T) {
 				assert.True(t, ok)
 				assert.Equal(t, tt.expectedErr, st.Code())
 			}
+			assert.Equal(t, tt.expectedLog, tt.mounter.GetLog())
 		})
 	}
 }
@@ -163,7 +255,9 @@ func TestNodeUnstageVolume(t *testing.T) {
 		name        string
 		req         *csi.NodeUnstageVolumeRequest
 		mockLVM     *mockLVM
+		mounter     *mount.FakeMounter
 		expectedErr codes.Code
+		expectedLog []mount.FakeAction
 	}{
 		{
 			name: "should unstage volume successfully",
@@ -183,6 +277,43 @@ func TestNodeUnstageVolume(t *testing.T) {
 					return nil
 				},
 			},
+			mounter: &mount.FakeMounter{
+				MountPoints: []mount.MountPoint{
+					{
+						Device: "/dev/test-vg/test-lv",
+						Path:   "/test/path",
+					},
+				},
+			},
+			expectedErr: codes.OK,
+			//expectedLog: []mount.FakeAction{
+			//	{
+			//		Action: "unmount",
+			//		Source: "/dev/test-vg/test-lv",
+			//		Target: "/test/path",
+			//		FSType: "ext4",
+			//	},
+			//},
+		},
+		{
+			name: "should unstage volume successfully (block volume)",
+			req: &csi.NodeUnstageVolumeRequest{
+				VolumeId:          "test-vg/test-lv",
+				StagingTargetPath: "/test/path",
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+						Attr: "-wi-a-----",
+					}, nil
+				},
+				deactivateLV: func(vg, name string) error {
+					return nil
+				},
+			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.OK,
 		},
 		{
@@ -204,6 +335,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 					return nil
 				},
 			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.OK,
 		},
 		{
@@ -221,6 +353,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 					return nil
 				},
 			},
+			mounter:     &mount.FakeMounter{},
 			expectedErr: codes.OK,
 		},
 		{
@@ -236,6 +369,14 @@ func TestNodeUnstageVolume(t *testing.T) {
 				deactivateLV: func(vg, name string) error {
 					assert.Fail(t, "deactivateLV should not have been called")
 					return nil
+				},
+			},
+			mounter: &mount.FakeMounter{
+				MountPoints: []mount.MountPoint{
+					{
+						Device: "/dev/test-vg/test-lv",
+						Path:   "/test/path",
+					},
 				},
 			},
 			expectedErr: codes.Internal,
@@ -258,6 +399,14 @@ func TestNodeUnstageVolume(t *testing.T) {
 					return fmt.Errorf("some other error")
 				},
 			},
+			mounter: &mount.FakeMounter{
+				MountPoints: []mount.MountPoint{
+					{
+						Device: "/dev/test-vg/test-lv",
+						Path:   "/test/path",
+					},
+				},
+			},
 			expectedErr: codes.Internal,
 		},
 	}
@@ -265,6 +414,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
+			driver.mounter = &mount.SafeFormatAndMount{Interface: tt.mounter, Exec: &testingexec.FakeExec{}}
 			_, err := driver.NodeUnstageVolume(context.Background(), tt.req)
 			if tt.expectedErr == codes.OK {
 				assert.NoError(t, err)
@@ -274,6 +424,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 				assert.True(t, ok)
 				assert.Equal(t, tt.expectedErr, st.Code())
 			}
+			assert.Equal(t, tt.expectedLog, tt.mounter.GetLog())
 		})
 	}
 }

@@ -2,12 +2,14 @@ package driver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
+	"k8s.io/mount-utils"
 )
 
 func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
@@ -38,14 +40,28 @@ func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRe
 		return nil, status.Errorf(codes.NotFound, "volume '%s' not found", req.VolumeId)
 	}
 
-	if lv.Attr.IsActive() {
-		klog.InfoS("Volume is already active", "vg", vgName, "lv", lvName)
+	if !lv.Attr.IsActive() {
+		klog.InfoS("Activating LV", "vg", vgName, "lv", lvName)
+		if err := d.lvm.ActivateLV(vgName, lvName); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to activate lv: %v", err)
+		}
+	}
+
+	// skip block volumes
+	if req.VolumeCapability.GetBlock() != nil {
+		klog.InfoS("Volume is a block device, skipping format and mount", "vg", vgName, "lv", lvName)
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	klog.InfoS("Activating LV", "vg", vgName, "lv", lvName)
-	if err := d.lvm.ActivateLV(vgName, lvName); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to activate lv: %v", err)
+	// format and mount the filesystem
+	devicePath := fmt.Sprintf("/dev/%s/%s", vgName, lvName)
+	fsType := "ext4"
+	if mount := req.GetVolumeCapability().GetMount(); mount.GetFsType() != "" {
+		fsType = mount.GetFsType()
+	}
+
+	if err := d.mounter.FormatAndMount(devicePath, req.StagingTargetPath, fsType, nil); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to format and mount volume: %v", err)
 	}
 
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -66,6 +82,25 @@ func (d *Driver) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolu
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
 	}
 	vgName, lvName := parts[0], parts[1]
+
+	dev, refcnt, err := mount.GetDeviceNameFromMount(d.mounter, req.StagingTargetPath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check if staging path is a mount point: %v", err)
+	}
+
+	if refcnt == 0 {
+		klog.InfoS("Staging path does not exist, assuming unmounted", "stagingPath", req.StagingTargetPath)
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
+
+	if refcnt > 1 {
+		klog.InfoS("NodeUnstageVolume: found references to device mounted at target path", "refcnt", refcnt, "device", dev, "stagingPath", req.StagingTargetPath)
+	}
+
+	klog.InfoS("Unmounting volume", "stagingPath", req.StagingTargetPath)
+	if err := mount.CleanupMountPoint(req.StagingTargetPath, d.mounter, false); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to unmount volume: %v", err)
+	}
 
 	// check if the volume was already deactivated
 	lv, err := d.lvm.GetLV(vgName, lvName)
