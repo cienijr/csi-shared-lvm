@@ -15,6 +15,25 @@ import (
 	"github.com/cienijr/csi-shared-lvm/pkg/lvm"
 )
 
+type mockResizer struct {
+	needResize func(devicePath, deviceMountPath string) (bool, error)
+	resize     func(devicePath, deviceMountPath string) (bool, error)
+}
+
+func (m *mockResizer) NeedResize(devicePath, deviceMountPath string) (bool, error) {
+	if m.needResize != nil {
+		return m.needResize(devicePath, deviceMountPath)
+	}
+	return false, nil
+}
+
+func (m *mockResizer) Resize(devicePath, deviceMountPath string) (bool, error) {
+	if m.resize != nil {
+		return m.resize(devicePath, deviceMountPath)
+	}
+	return true, nil
+}
+
 func TestNodeStageVolume(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -236,6 +255,15 @@ func TestNodeStageVolume(t *testing.T) {
 			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
 			exec := &testingexec.FakeExec{CommandScript: tt.actions}
 			driver.mounter = &mount.SafeFormatAndMount{Interface: tt.mounter, Exec: exec}
+			driver.resizer = &mockResizer{
+				needResize: func(devicePath, deviceMountPath string) (bool, error) {
+					return false, nil
+				},
+				resize: func(devicePath, deviceMountPath string) (bool, error) {
+					assert.Fail(t, "resize should not have been called")
+					return false, nil
+				},
+			}
 			_, err := driver.NodeStageVolume(context.Background(), tt.req)
 			if tt.expectedErr == codes.OK {
 				assert.NoError(t, err)
@@ -246,6 +274,134 @@ func TestNodeStageVolume(t *testing.T) {
 				assert.Equal(t, tt.expectedErr, st.Code())
 			}
 			assert.Equal(t, tt.expectedLog, tt.mounter.GetLog())
+		})
+	}
+}
+
+func TestNodeExpandVolume(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         *csi.NodeExpandVolumeRequest
+		mounter     *mount.FakeMounter
+		mockResizer *mockResizer
+		useTempDir  bool
+		expectedErr codes.Code
+	}{
+		{
+			name: "should expand volume successfully",
+			req: &csi.NodeExpandVolumeRequest{
+				VolumeId:   "test-vg/test-lv",
+				VolumePath: "/test/path",
+			},
+			mounter: &mount.FakeMounter{
+				MountPoints: []mount.MountPoint{
+					{
+						Device: "/dev/test-vg/test-lv",
+						Path:   "/test/path",
+					},
+				},
+			},
+			mockResizer: &mockResizer{
+				resize: func(devicePath, deviceMountPath string) (bool, error) {
+					return true, nil
+				},
+			},
+			useTempDir:  true,
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should ignore block volumes (not mount point)",
+			req: &csi.NodeExpandVolumeRequest{
+				VolumeId:   "test-vg/test-lv",
+				VolumePath: "/dev/test-vg/test-lv",
+				VolumeCapability: &csi.VolumeCapability{
+					AccessType: &csi.VolumeCapability_Block{
+						Block: &csi.VolumeCapability_BlockVolume{},
+					},
+				},
+			},
+			mounter:     &mount.FakeMounter{},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should fail if volume id is missing",
+			req: &csi.NodeExpandVolumeRequest{
+				VolumePath: "/test/path",
+			},
+			mounter:     &mount.FakeMounter{},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should fail if volume path is missing",
+			req: &csi.NodeExpandVolumeRequest{
+				VolumeId: "test-vg/test-lv",
+			},
+			mounter:     &mount.FakeMounter{},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should fail if volume id format is invalid",
+			req: &csi.NodeExpandVolumeRequest{
+				VolumeId:   "invalid",
+				VolumePath: "/test/path",
+			},
+			mounter:     &mount.FakeMounter{},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should fail if resize fails",
+			req: &csi.NodeExpandVolumeRequest{
+				VolumeId:   "test-vg/test-lv",
+				VolumePath: "/test/path",
+			},
+			mounter: &mount.FakeMounter{
+				MountPoints: []mount.MountPoint{
+					{
+						Device: "/dev/test-vg/test-lv",
+						Path:   "/test/path",
+					},
+				},
+			},
+			mockResizer: &mockResizer{
+				resize: func(devicePath, deviceMountPath string) (bool, error) {
+					return false, fmt.Errorf("resize failed")
+				},
+			},
+			useTempDir:  true,
+			expectedErr: codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.useTempDir {
+				tmpDir := t.TempDir()
+				tt.req.VolumePath = tmpDir
+				if tt.mounter != nil {
+					for i := range tt.mounter.MountPoints {
+						if tt.mounter.MountPoints[i].Path == "/test/path" {
+							tt.mounter.MountPoints[i].Path = tmpDir
+						}
+					}
+				}
+			}
+
+			driver := NewDriver("test-endpoint", nil, nil)
+			driver.mounter = &mount.SafeFormatAndMount{Interface: tt.mounter, Exec: &testingexec.FakeExec{}}
+			driver.resizer = &mockResizer{}
+			if tt.mockResizer != nil {
+				driver.resizer = tt.mockResizer
+			}
+
+			_, err := driver.NodeExpandVolume(context.Background(), tt.req)
+			if tt.expectedErr == codes.OK {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedErr, st.Code())
+			}
 		})
 	}
 }

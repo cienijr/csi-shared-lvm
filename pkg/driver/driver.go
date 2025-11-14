@@ -17,13 +17,21 @@ type Driver struct {
 	allowedVolumeGroups []string
 	lvm                 lvm.LVM
 	mounter             *mount.SafeFormatAndMount
+	resizer             Resizer
+}
+
+type Resizer interface {
+	NeedResize(devicePath, deviceMountPath string) (bool, error)
+	Resize(devicePath, deviceMountPath string) (bool, error)
 }
 
 func NewDriver(endpoint string, allowedVolumeGroups []string, lvm lvm.LVM) *Driver {
+	mountExec := utilexec.New()
 	return &Driver{
 		endpoint:            endpoint,
 		allowedVolumeGroups: allowedVolumeGroups,
 		lvm:                 lvm,
-		mounter:             &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: utilexec.New()},
+		mounter:             &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: mountExec},
+		resizer:             mount.NewResizeFs(mountExec),
 	}
 }

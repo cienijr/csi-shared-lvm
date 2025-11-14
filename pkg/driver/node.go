@@ -64,6 +64,18 @@ func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRe
 		return nil, status.Errorf(codes.Internal, "failed to format and mount volume: %v", err)
 	}
 
+	// check if resize is needed
+	needResize, err := d.resizer.NeedResize(devicePath, req.StagingTargetPath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check if volume needs resize: %v", err)
+	}
+	if needResize {
+		klog.InfoS("Resizing volume", "devicePath", devicePath, "stagingPath", req.StagingTargetPath)
+		if _, err := d.resizer.Resize(devicePath, req.StagingTargetPath); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to resize volume: %v", err)
+		}
+	}
+
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
@@ -143,7 +155,33 @@ func (d *Driver) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeS
 
 func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	klog.InfoS("NodeExpandVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.VolumePath == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume path is required")
+	}
+
+	parts := strings.Split(req.VolumeId, "/")
+	if len(parts) != 2 {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	}
+	vgName, lvName := parts[0], parts[1]
+	devicePath := fmt.Sprintf("/dev/%s/%s", vgName, lvName)
+
+	// skip block volumes
+	if req.VolumeCapability.GetBlock() != nil {
+		klog.InfoS("Volume is a block device, skipping filesystem resize", "vg", vgName, "lv", lvName)
+		return &csi.NodeExpandVolumeResponse{}, nil
+	}
+
+	klog.InfoS("Resizing filesystem", "devicePath", devicePath, "volumePath", req.VolumePath)
+	if _, err := d.resizer.Resize(devicePath, req.VolumePath); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resize filesystem: %v", err)
+	}
+
+	return &csi.NodeExpandVolumeResponse{}, nil
 }
 
 func (d *Driver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
@@ -154,6 +192,13 @@ func (d *Driver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabi
 				Type: &csi.NodeServiceCapability_Rpc{
 					Rpc: &csi.NodeServiceCapability_RPC{
 						Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+					},
+				},
+			},
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
 					},
 				},
 			},
