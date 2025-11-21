@@ -3,7 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
-	"strings"
+	"os"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -25,11 +25,10 @@ func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRe
 		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
 	}
 
-	parts := strings.Split(req.VolumeId, "/")
-	if len(parts) != 2 {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	vgName, lvName, err := getVGAndLVNames(req.VolumeId)
+	if err != nil {
+		return nil, err
 	}
-	vgName, lvName := parts[0], parts[1]
 
 	// check if the volume is already staged
 	lv, err := d.lvm.GetLV(vgName, lvName)
@@ -89,11 +88,10 @@ func (d *Driver) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolu
 		return nil, status.Error(codes.InvalidArgument, "staging target path is required")
 	}
 
-	parts := strings.Split(req.VolumeId, "/")
-	if len(parts) != 2 {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	vgName, lvName, err := getVGAndLVNames(req.VolumeId)
+	if err != nil {
+		return nil, err
 	}
-	vgName, lvName := parts[0], parts[1]
 
 	dev, refcnt, err := mount.GetDeviceNameFromMount(d.mounter, req.StagingTargetPath)
 	if err != nil {
@@ -140,12 +138,125 @@ func (d *Driver) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolu
 
 func (d *Driver) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	klog.InfoS("NodePublishVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.StagingTargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "staging target path is required")
+	}
+	if req.TargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "target path is required")
+	}
+	if req.VolumeCapability == nil {
+		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
+	}
+
+	// check if the volume is already mounted
+	notMnt, err := d.mounter.IsLikelyNotMountPoint(req.TargetPath)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, status.Errorf(codes.Internal, "failed to check if target path is a mount point: %v", err)
+	}
+	if !notMnt {
+		klog.InfoS("Volume is already mounted", "targetPath", req.TargetPath)
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	if req.VolumeCapability.GetBlock() != nil {
+		return d.nodePublishVolumeBlock(req)
+	}
+	return d.nodePublishVolumeMount(req)
+}
+
+func (d *Driver) nodePublishVolumeMount(req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+	klog.InfoS("Publishing mount volume", "volumeId", req.VolumeId, "targetPath", req.TargetPath)
+
+	// ensure target path exists
+	if err := os.MkdirAll(req.TargetPath, 0755); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create target path: %v", err)
+	}
+
+	options := []string{"bind"}
+	if req.Readonly {
+		options = append(options, "ro")
+	}
+
+	fsType := req.GetVolumeCapability().GetMount().GetFsType()
+
+	if err := d.mounter.Mount(req.StagingTargetPath, req.TargetPath, fsType, options); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to mount volume: %v", err)
+	}
+
+	return &csi.NodePublishVolumeResponse{}, nil
+}
+
+func (d *Driver) nodePublishVolumeBlock(req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+	klog.InfoS("Publishing block volume", "volumeId", req.VolumeId, "targetPath", req.TargetPath)
+
+	devicePath, err := getDevicePath(req.VolumeId)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure target path exists
+	if _, err := os.Stat(req.TargetPath); os.IsNotExist(err) {
+		// create the file
+		f, err := os.OpenFile(req.TargetPath, os.O_CREATE|os.O_RDWR, 0644)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to create target path file: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to close target path file: %v", err)
+		}
+	}
+
+	options := []string{"bind"}
+	if req.Readonly {
+		options = append(options, "ro")
+	}
+
+	if err := d.mounter.Mount(devicePath, req.TargetPath, "", options); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to mount volume: %v", err)
+	}
+
+	return &csi.NodePublishVolumeResponse{}, nil
 }
 
 func (d *Driver) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	klog.InfoS("NodeUnpublishVolume called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.TargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "target path is required")
+	}
+
+	// Check if the target path is a mount point
+	notMnt, err := d.mounter.IsLikelyNotMountPoint(req.TargetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			klog.InfoS("Target path does not exist, assuming unmounted", "targetPath", req.TargetPath)
+			return &csi.NodeUnpublishVolumeResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "failed to check if target path is a mount point: %v", err)
+	}
+	if notMnt {
+		klog.InfoS("Target path is not a mount point, assuming unmounted", "targetPath", req.TargetPath)
+		return &csi.NodeUnpublishVolumeResponse{}, nil
+	}
+
+	klog.InfoS("Unmounting volume", "targetPath", req.TargetPath)
+	if err := d.mounter.Unmount(req.TargetPath); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to unmount volume: %v", err)
+	}
+
+	// Remove the target path
+	if err := os.Remove(req.TargetPath); err != nil && !os.IsNotExist(err) {
+		return nil, status.Errorf(codes.Internal, "failed to remove target path: %v", err)
+	}
+
+	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
 func (d *Driver) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
@@ -163,16 +274,14 @@ func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolume
 		return nil, status.Error(codes.InvalidArgument, "volume path is required")
 	}
 
-	parts := strings.Split(req.VolumeId, "/")
-	if len(parts) != 2 {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid volume id: %s", req.VolumeId)
+	devicePath, err := getDevicePath(req.VolumeId)
+	if err != nil {
+		return nil, err
 	}
-	vgName, lvName := parts[0], parts[1]
-	devicePath := fmt.Sprintf("/dev/%s/%s", vgName, lvName)
 
 	// skip block volumes
 	if req.VolumeCapability.GetBlock() != nil {
-		klog.InfoS("Volume is a block device, skipping filesystem resize", "vg", vgName, "lv", lvName)
+		klog.InfoS("Volume is a block device, skipping filesystem resize")
 		return &csi.NodeExpandVolumeResponse{}, nil
 	}
 
