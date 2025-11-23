@@ -261,7 +261,59 @@ func (d *Driver) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublish
 
 func (d *Driver) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
 	klog.InfoS("NodeGetVolumeStats called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.VolumePath == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume path is required")
+	}
+
+	if _, err := os.Stat(req.VolumePath); os.IsNotExist(err) {
+		return nil, status.Errorf(codes.NotFound, "volume path %s not found", req.VolumePath)
+	}
+
+	isBlock, err := d.stats.IsBlockDevice(req.VolumePath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check if path is block device: %v", err)
+	}
+
+	if isBlock {
+		totalBytes, err := d.stats.GetBlockSizeBytes(req.VolumePath)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get block device stats: %v", err)
+		}
+		return &csi.NodeGetVolumeStatsResponse{
+			Usage: []*csi.VolumeUsage{
+				{
+					Total: totalBytes,
+					Unit:  csi.VolumeUsage_BYTES,
+				},
+			},
+		}, nil
+	}
+
+	available, capacity, used, inodes, inodesFree, inodesUsed, err := d.stats.GetFSStats(req.VolumePath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get fs stats: %v", err)
+	}
+
+	return &csi.NodeGetVolumeStatsResponse{
+		Usage: []*csi.VolumeUsage{
+			{
+				Available: available,
+				Total:     capacity,
+				Used:      used,
+				Unit:      csi.VolumeUsage_BYTES,
+			},
+			{
+				Available: inodesFree,
+				Total:     inodes,
+				Used:      inodesUsed,
+				Unit:      csi.VolumeUsage_INODES,
+			},
+		},
+	}, nil
 }
 
 func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
@@ -308,6 +360,13 @@ func (d *Driver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabi
 				Type: &csi.NodeServiceCapability_Rpc{
 					Rpc: &csi.NodeServiceCapability_RPC{
 						Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
+					},
+				},
+			},
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
 					},
 				},
 			},

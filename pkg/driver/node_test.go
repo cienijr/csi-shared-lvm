@@ -34,6 +34,33 @@ func (m *mockResizer) Resize(devicePath, deviceMountPath string) (bool, error) {
 	return true, nil
 }
 
+type mockDeviceStats struct {
+	getBlockSizeBytes func(devicePath string) (int64, error)
+	getFSStats        func(path string) (int64, int64, int64, int64, int64, int64, error)
+	isBlockDevice     func(path string) (bool, error)
+}
+
+func (m *mockDeviceStats) GetBlockSizeBytes(devicePath string) (int64, error) {
+	if m.getBlockSizeBytes != nil {
+		return m.getBlockSizeBytes(devicePath)
+	}
+	return 0, nil
+}
+
+func (m *mockDeviceStats) GetFSStats(path string) (int64, int64, int64, int64, int64, int64, error) {
+	if m.getFSStats != nil {
+		return m.getFSStats(path)
+	}
+	return 0, 0, 0, 0, 0, 0, nil
+}
+
+func (m *mockDeviceStats) IsBlockDevice(path string) (bool, error) {
+	if m.isBlockDevice != nil {
+		return m.isBlockDevice(path)
+	}
+	return false, nil
+}
+
 func TestNodeStageVolume(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -581,6 +608,130 @@ func TestNodeUnstageVolume(t *testing.T) {
 				assert.Equal(t, tt.expectedErr, st.Code())
 			}
 			assert.Equal(t, tt.expectedLog, tt.mounter.GetLog())
+		})
+	}
+}
+
+func TestNodeGetVolumeStats(t *testing.T) {
+	tests := []struct {
+		name            string
+		req             *csi.NodeGetVolumeStatsRequest
+		mockDeviceStats *mockDeviceStats
+		expectedErr     codes.Code
+		expectedResp    *csi.NodeGetVolumeStatsResponse
+		useTempDir      bool
+	}{
+		{
+			name: "should return stats for FS volume",
+			req: &csi.NodeGetVolumeStatsRequest{
+				VolumeId:   "test-vg/test-lv",
+				VolumePath: "/test/path",
+			},
+			mockDeviceStats: &mockDeviceStats{
+				isBlockDevice: func(path string) (bool, error) {
+					return false, nil
+				},
+				getFSStats: func(path string) (int64, int64, int64, int64, int64, int64, error) {
+					return 100, 200, 100, 20, 10, 10, nil
+				},
+			},
+			useTempDir:  true,
+			expectedErr: codes.OK,
+			expectedResp: &csi.NodeGetVolumeStatsResponse{
+				Usage: []*csi.VolumeUsage{
+					{
+						Available: 100,
+						Total:     200,
+						Used:      100,
+						Unit:      csi.VolumeUsage_BYTES,
+					},
+					{
+						Available: 10,
+						Total:     20,
+						Used:      10,
+						Unit:      csi.VolumeUsage_INODES,
+					},
+				},
+			},
+		},
+		{
+			name: "should return stats for block volume",
+			req: &csi.NodeGetVolumeStatsRequest{
+				VolumeId:   "test-vg/test-lv",
+				VolumePath: "/test/path",
+			},
+			mockDeviceStats: &mockDeviceStats{
+				isBlockDevice: func(path string) (bool, error) {
+					return true, nil
+				},
+				getBlockSizeBytes: func(devicePath string) (int64, error) {
+					return 1024, nil
+				},
+			},
+			useTempDir:  true,
+			expectedErr: codes.OK,
+			expectedResp: &csi.NodeGetVolumeStatsResponse{
+				Usage: []*csi.VolumeUsage{
+					{
+						Total: 1024,
+						Unit:  csi.VolumeUsage_BYTES,
+					},
+				},
+			},
+		},
+		{
+			name: "should fail if volume path does not exist",
+			req: &csi.NodeGetVolumeStatsRequest{
+				VolumeId:   "test-vg/test-lv",
+				VolumePath: "/test/nonexistent",
+			},
+			mockDeviceStats: &mockDeviceStats{},
+			expectedErr:     codes.NotFound,
+		},
+		{
+			name: "should fail if stats retrieval fails",
+			req: &csi.NodeGetVolumeStatsRequest{
+				VolumeId:   "test-vg/test-lv",
+				VolumePath: "/test/path",
+			},
+			mockDeviceStats: &mockDeviceStats{
+				isBlockDevice: func(path string) (bool, error) {
+					return false, nil
+				},
+				getFSStats: func(path string) (int64, int64, int64, int64, int64, int64, error) {
+					return 0, 0, 0, 0, 0, 0, fmt.Errorf("statfs failed")
+				},
+			},
+			useTempDir:  true,
+			expectedErr: codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.useTempDir {
+				tmpDir := t.TempDir()
+				// We create a dummy file/dir so os.Stat passes
+				tt.req.VolumePath = tmpDir
+			}
+
+			driver := NewDriver("test-endpoint", nil, nil)
+			if tt.mockDeviceStats != nil {
+				driver.stats = tt.mockDeviceStats
+			} else {
+				driver.stats = &mockDeviceStats{}
+			}
+
+			resp, err := driver.NodeGetVolumeStats(context.Background(), tt.req)
+			if tt.expectedErr == codes.OK {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedResp, resp)
+			} else {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedErr, st.Code())
+			}
 		})
 	}
 }
