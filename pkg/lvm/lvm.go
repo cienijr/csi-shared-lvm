@@ -17,6 +17,7 @@ type LVM interface {
 	ResizeLV(vg, name string, size int64) error
 	ActivateLV(vg, name string) error
 	DeactivateLV(vg, name string) error
+	GetVG(name string) (*VolumeGroup, error)
 }
 type client struct {
 }
@@ -88,4 +89,14 @@ func (c *client) DeactivateLV(vg, name string) error {
 		return fmt.Errorf("failed to deactivate lv: %v, stderr: %s", err, stderr.String())
 	}
 	return nil
+}
+
+func (c *client) GetVG(name string) (*VolumeGroup, error) {
+	command, args := buildVgsCmg(name)
+	cmd := exec.Command(command, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return parseVgsOutput(stdout.String(), stderr.String(), err)
 }

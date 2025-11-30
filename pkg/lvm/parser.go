@@ -81,3 +81,32 @@ func isNotFound(err error, stderr string) bool {
 
 	return false
 }
+
+func parseVgsOutput(stdout, stderr string, err error) (*VolumeGroup, error) {
+	if err != nil {
+		if isNotFound(err, stderr) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get vg: %v, stderr: %s", err, stderr)
+	}
+
+	output := strings.TrimSpace(stdout)
+	if output == "" {
+		return nil, nil
+	}
+
+	fields := strings.Fields(output)
+	if len(fields) < 2 {
+		return nil, fmt.Errorf("failed to parse vgs output: %s", output)
+	}
+
+	freeSize, err := parseLVSize(fields[1])
+	if err != nil {
+		return nil, err
+	}
+
+	return &VolumeGroup{
+		Name:     fields[0],
+		FreeSize: freeSize,
+	}, nil
+}

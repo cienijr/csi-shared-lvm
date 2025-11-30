@@ -12,3 +12,8 @@ type LogicalVolume struct {
 func (a Attr) IsActive() bool {
 	return rune(a[4]) == 'a'
 }
+
+type VolumeGroup struct {
+	Name     string
+	FreeSize int64
+}

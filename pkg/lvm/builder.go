@@ -35,3 +35,8 @@ func buildLvchangeDeactivateCmd(vg, name string) (string, []string) {
 	args := []string{"-an", fmt.Sprintf("%s/%s", vg, name)}
 	return "lvchange", args
 }
+
+func buildVgsCmg(name string) (string, []string) {
+	args := []string{"--noheadings", "--nosuffix", "--units", "b", "-o", "vg_name,vg_free", name}
+	return "vgs", args
+}

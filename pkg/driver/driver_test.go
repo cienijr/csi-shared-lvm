@@ -11,6 +11,7 @@ type mockLVM struct {
 	resizeLV     func(vg, name string, size int64) error
 	activateLV   func(vg, name string) error
 	deactivateLV func(vg, name string) error
+	getVG        func(name string) (*lvm.VolumeGroup, error)
 }
 
 func (m *mockLVM) GetLV(vg, name string) (*lvm.LogicalVolume, error) {
@@ -35,4 +36,11 @@ func (m *mockLVM) ActivateLV(vg, name string) error {
 
 func (m *mockLVM) DeactivateLV(vg, name string) error {
 	return m.deactivateLV(vg, name)
+}
+
+func (m *mockLVM) GetVG(name string) (*lvm.VolumeGroup, error) {
+	if m.getVG != nil {
+		return m.getVG(name)
+	}
+	return nil, nil
 }

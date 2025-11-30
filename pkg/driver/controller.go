@@ -143,7 +143,51 @@ func (d *Driver) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (
 
 func (d *Driver) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
 	klog.InfoS("GetCapacity called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	var vgsToQuery []string
+	params := req.GetParameters()
+	if vgName, ok := params[volumeGroupKey]; ok {
+		if len(d.allowedVolumeGroups) > 0 {
+			allowed := false
+			for _, allowedVG := range d.allowedVolumeGroups {
+				if allowedVG == vgName {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return nil, status.Errorf(codes.InvalidArgument, "volume group '%s' is not allowed", vgName)
+			}
+		}
+		vgsToQuery = []string{vgName}
+	} else {
+		if len(d.allowedVolumeGroups) > 0 {
+			vgsToQuery = d.allowedVolumeGroups
+		} else {
+			return &csi.GetCapacityResponse{
+				AvailableCapacity: 0,
+			}, nil
+		}
+	}
+
+	var totalAvailableCapacity int64
+	for _, vgName := range vgsToQuery {
+		vg, err := d.lvm.GetVG(vgName)
+		if err != nil {
+			if params[volumeGroupKey] != "" {
+				return nil, status.Errorf(codes.Internal, "failed to get vg '%s': %v", vgName, err)
+			}
+			klog.ErrorS(err, "Failed to get VG", "vg", vgName)
+			continue
+		}
+		if vg != nil {
+			totalAvailableCapacity += vg.FreeSize
+		}
+	}
+
+	return &csi.GetCapacityResponse{
+		AvailableCapacity: totalAvailableCapacity,
+	}, nil
 }
 
 func (d *Driver) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
@@ -161,6 +205,13 @@ func (d *Driver) ControllerGetCapabilities(ctx context.Context, req *csi.Control
 				Type: &csi.ControllerServiceCapability_Rpc{
 					Rpc: &csi.ControllerServiceCapability_RPC{
 						Type: csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
+					},
+				},
+			},
+			{
+				Type: &csi.ControllerServiceCapability_Rpc{
+					Rpc: &csi.ControllerServiceCapability_RPC{
+						Type: csi.ControllerServiceCapability_RPC_GET_CAPACITY,
 					},
 				},
 			},

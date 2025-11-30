@@ -459,3 +459,126 @@ func TestControllerExpandVolume(t *testing.T) {
 		})
 	}
 }
+
+func TestGetCapacity(t *testing.T) {
+	tests := []struct {
+		name         string
+		req          *csi.GetCapacityRequest
+		allowedVGs   []string
+		mockLVM      *mockLVM
+		expectedErr  codes.Code
+		expectedResp *csi.GetCapacityResponse
+	}{
+		{
+			name: "should return capacity for specific VG",
+			req: &csi.GetCapacityRequest{
+				Parameters: map[string]string{
+					volumeGroupKey: "test-vg",
+				},
+			},
+			allowedVGs: []string{"test-vg"},
+			mockLVM: &mockLVM{
+				getVG: func(name string) (*lvm.VolumeGroup, error) {
+					if name == "test-vg" {
+						return &lvm.VolumeGroup{
+							Name:     "test-vg",
+							FreeSize: 100,
+						}, nil
+					}
+					return nil, nil
+				},
+			},
+			expectedErr: codes.OK,
+			expectedResp: &csi.GetCapacityResponse{
+				AvailableCapacity: 100,
+			},
+		},
+		{
+			name:       "should return capacity for allowed VGs (implicit)",
+			req:        &csi.GetCapacityRequest{},
+			allowedVGs: []string{"vg1", "vg2"},
+			mockLVM: &mockLVM{
+				getVG: func(name string) (*lvm.VolumeGroup, error) {
+					if name == "vg1" {
+						return &lvm.VolumeGroup{Name: "vg1", FreeSize: 100}, nil
+					}
+					if name == "vg2" {
+						return &lvm.VolumeGroup{Name: "vg2", FreeSize: 200}, nil
+					}
+					return nil, nil
+				},
+			},
+			expectedErr: codes.OK,
+			expectedResp: &csi.GetCapacityResponse{
+				AvailableCapacity: 300,
+			},
+		},
+		{
+			name:        "should return 0 if no allowed VGs configured and no param",
+			req:         &csi.GetCapacityRequest{},
+			allowedVGs:  nil,
+			expectedErr: codes.OK,
+			expectedResp: &csi.GetCapacityResponse{
+				AvailableCapacity: 0,
+			},
+		},
+		{
+			name: "should fail if requested VG is not allowed",
+			req: &csi.GetCapacityRequest{
+				Parameters: map[string]string{
+					volumeGroupKey: "forbidden-vg",
+				},
+			},
+			allowedVGs:  []string{"allowed-vg"},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should fail if get vg error on specific request",
+			req: &csi.GetCapacityRequest{
+				Parameters: map[string]string{
+					volumeGroupKey: "test-vg",
+				},
+			},
+			allowedVGs: []string{"test-vg"},
+			mockLVM: &mockLVM{
+				getVG: func(name string) (*lvm.VolumeGroup, error) {
+					return nil, fmt.Errorf("lvm error")
+				},
+			},
+			expectedErr: codes.Internal,
+		},
+		{
+			name:       "should skip if get vg error on implicit request",
+			req:        &csi.GetCapacityRequest{},
+			allowedVGs: []string{"vg1", "error-vg"},
+			mockLVM: &mockLVM{
+				getVG: func(name string) (*lvm.VolumeGroup, error) {
+					if name == "vg1" {
+						return &lvm.VolumeGroup{Name: "vg1", FreeSize: 100}, nil
+					}
+					return nil, fmt.Errorf("lvm error")
+				},
+			},
+			expectedErr: codes.OK,
+			expectedResp: &csi.GetCapacityResponse{
+				AvailableCapacity: 100,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver := NewDriver("test-endpoint", tt.allowedVGs, tt.mockLVM)
+			resp, err := driver.GetCapacity(context.Background(), tt.req)
+			if tt.expectedErr == codes.OK {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedResp, resp)
+			} else {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedErr, st.Code())
+			}
+		})
+	}
+}
