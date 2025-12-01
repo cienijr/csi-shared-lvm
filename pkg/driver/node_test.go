@@ -612,6 +612,16 @@ func TestNodeUnstageVolume(t *testing.T) {
 	}
 }
 
+func TestNodeGetInfo(t *testing.T) {
+	driver := NewDriver("test-endpoint", nil, nil)
+	driver.nodeID = "test-node-id"
+
+	resp, err := driver.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, "test-node-id", resp.NodeId)
+}
+
 func TestNodeGetVolumeStats(t *testing.T) {
 	tests := []struct {
 		name            string

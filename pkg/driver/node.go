@@ -376,5 +376,7 @@ func (d *Driver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabi
 
 func (d *Driver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	klog.InfoS("NodeGetInfo called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+	return &csi.NodeGetInfoResponse{
+		NodeId: d.nodeID,
+	}, nil
 }

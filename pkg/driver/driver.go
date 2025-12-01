@@ -20,6 +20,7 @@ type Driver struct {
 	csi.UnimplementedNodeServer
 
 	endpoint            string
+	nodeID              string
 	allowedVolumeGroups []string
 	lvm                 lvm.LVM
 	mounter             *mount.SafeFormatAndMount
@@ -77,9 +78,11 @@ func (d *defaultDeviceStats) IsBlockDevice(path string) (bool, error) {
 }
 
 func NewDriver(endpoint string, allowedVolumeGroups []string, lvm lvm.LVM) *Driver {
+	nodeID, _ := os.Hostname()
 	mountExec := utilexec.New()
 	return &Driver{
 		endpoint:            endpoint,
+		nodeID:              nodeID,
 		allowedVolumeGroups: allowedVolumeGroups,
 		lvm:                 lvm,
 		mounter:             &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: mountExec},
