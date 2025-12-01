@@ -136,3 +136,58 @@ func TestParseAttr(t *testing.T) {
 		})
 	}
 }
+
+func TestParseVGSOutput(t *testing.T) {
+	tests := []struct {
+		name        string
+		stdout      string
+		stderr      string
+		err         error
+		expectedVG  *VolumeGroup
+		expectedErr error
+	}{
+		{
+			name:   "should parse vgs output successfully",
+			stdout: "  test-vg 1073741824",
+			expectedVG: &VolumeGroup{
+				Name:     "test-vg",
+				FreeSize: 1073741824,
+			},
+		},
+		{
+			name:        "should return nil if vg not found",
+			stdout:      "",
+			stderr:      `  Volume group "test-vg" not found`,
+			err:         &mockExitError{exitCode: 5},
+			expectedVG:  nil,
+			expectedErr: nil,
+		},
+		{
+			name:        "should return error if command fails",
+			stdout:      "",
+			stderr:      "some other error",
+			err:         fmt.Errorf("some error"),
+			expectedVG:  nil,
+			expectedErr: fmt.Errorf("failed to get vg: some error, stderr: some other error"),
+		},
+		{
+			name:        "should return error on malformed output",
+			stdout:      "malformed",
+			expectedVG:  nil,
+			expectedErr: fmt.Errorf("failed to parse vgs output: malformed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vg, err := parseVgsOutput(tt.stdout, tt.stderr, tt.err)
+			if tt.expectedErr != nil {
+				assert.Error(t, err)
+				assert.Equal(t, tt.expectedErr, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedVG, vg)
+			}
+		})
+	}
+}

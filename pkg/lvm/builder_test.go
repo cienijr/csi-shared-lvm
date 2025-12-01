@@ -177,3 +177,27 @@ func TestBuildLvchangeDeactivateCmd(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildVgsCmg(t *testing.T) {
+	tests := []struct {
+		name         string
+		vg           string
+		expectedCmd  string
+		expectedArgs []string
+	}{
+		{
+			name:         "should get vg successfully",
+			vg:           "test-vg",
+			expectedCmd:  "vgs",
+			expectedArgs: strings.Fields("--noheadings --nosuffix --units b -o vg_name,vg_free test-vg"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, args := buildVgsCmg(tt.vg)
+			assert.Equal(t, tt.expectedCmd, cmd)
+			assert.Equal(t, tt.expectedArgs, args)
+		})
+	}
+}
