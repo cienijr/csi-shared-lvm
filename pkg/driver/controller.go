@@ -133,7 +133,60 @@ func (d *Driver) ControllerUnpublishVolume(ctx context.Context, req *csi.Control
 
 func (d *Driver) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
 	klog.InfoS("ValidateVolumeCapabilities called", "req", req)
-	return nil, status.Error(codes.Unimplemented, "")
+
+	if req.VolumeId == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume id is required")
+	}
+	if req.VolumeCapabilities == nil || len(req.VolumeCapabilities) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "volume capabilities are required")
+	}
+
+	vgName, lvName, err := getVGAndLVNames(req.VolumeId)
+	if err != nil {
+		return nil, err
+	}
+
+	lv, err := d.lvm.GetLV(vgName, lvName)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get lv: %v", err)
+	}
+	if lv == nil {
+		return nil, status.Errorf(codes.NotFound, "volume '%s' not found", req.VolumeId)
+	}
+
+	// validate capabilities
+	confirmed := true
+	for _, cap := range req.VolumeCapabilities {
+		if cap.GetAccessMode() == nil {
+			confirmed = false
+			break
+		}
+		mode := cap.GetAccessMode().GetMode()
+
+		if cap.GetBlock() != nil {
+			// block volumes support all standard access modes including RWX
+			continue
+		}
+
+		// mount volumes only support Single Node modes
+		if mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER &&
+			mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY {
+			confirmed = false
+			break
+		}
+	}
+
+	if !confirmed {
+		return &csi.ValidateVolumeCapabilitiesResponse{
+			Message: "Unsupported capabilities: Mount volumes only support SINGLE_NODE modes",
+		}, nil
+	}
+
+	return &csi.ValidateVolumeCapabilitiesResponse{
+		Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
+			VolumeCapabilities: req.VolumeCapabilities,
+		},
+	}, nil
 }
 
 func (d *Driver) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {

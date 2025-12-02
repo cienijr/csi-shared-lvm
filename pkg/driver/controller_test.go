@@ -582,3 +582,150 @@ func TestGetCapacity(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateVolumeCapabilities(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         *csi.ValidateVolumeCapabilitiesRequest
+		mockLVM     *mockLVM
+		expectedErr codes.Code
+	}{
+		{
+			name: "should confirm capabilities for existing volume",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: "test-vg/test-lv",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+						},
+					},
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{
+						Name: "test-lv",
+						VG:   "test-vg",
+					}, nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should return not found for non-existing volume",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: "test-vg/test-lv",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessType: &csi.VolumeCapability_Mount{},
+					},
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return nil, nil
+				},
+			},
+			expectedErr: codes.NotFound,
+		},
+		{
+			name: "should fail if invalid volume id",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: "invalid-id",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{},
+				},
+			},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should fail if no capabilities provided",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: "test-vg/test-lv",
+			},
+			expectedErr: codes.InvalidArgument,
+		},
+		{
+			name: "should confirm capabilities for block volume with RWX",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: "test-vg/test-lv",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessType: &csi.VolumeCapability_Block{
+							Block: &csi.VolumeCapability_BlockVolume{},
+						},
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+						},
+					},
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{Name: "test-lv", VG: "test-vg"}, nil
+				},
+			},
+			expectedErr: codes.OK,
+		},
+		{
+			name: "should fail capabilities for mount volume with RWX",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: "test-vg/test-lv",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+						},
+					},
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return &lvm.LogicalVolume{Name: "test-lv", VG: "test-vg"}, nil
+				},
+			},
+			expectedErr: codes.OK, // Returns nil Confirmed, not error code
+		},
+		{
+			name: "should fail on internal error",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId: "test-vg/test-lv",
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{},
+				},
+			},
+			mockLVM: &mockLVM{
+				getLV: func(vg, name string) (*lvm.LogicalVolume, error) {
+					return nil, fmt.Errorf("some error")
+				},
+			},
+			expectedErr: codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver := NewDriver("test-endpoint", nil, tt.mockLVM)
+			resp, err := driver.ValidateVolumeCapabilities(context.Background(), tt.req)
+			if tt.expectedErr == codes.OK {
+				assert.NoError(t, err)
+				if tt.name == "should fail capabilities for mount volume with RWX" {
+					assert.Nil(t, resp.Confirmed)
+					assert.NotEmpty(t, resp.Message)
+				}
+			} else {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedErr, st.Code())
+			}
+		})
+	}
+}
