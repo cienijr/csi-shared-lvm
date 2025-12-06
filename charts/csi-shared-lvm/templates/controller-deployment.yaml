@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csi-shared-lvm.fullname" . }}-controller
+  namespace: kube-system
+  labels:
+    app: csi-shared-lvm-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: csi-shared-lvm-controller
+  template:
+    metadata:
+      labels:
+        app: csi-shared-lvm-controller
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}-controller
+      containers:
+      - name: csi-provisioner
+        image: {{ .Values.sidecars.provisioner.image }}
+        args:
+        - "--csi-address=$(ADDRESS)"
+        - "--v=5"
+        - "--timeout=120s"
+        - "--leader-election"
+        - "--default-fstype=ext4"
+        env:
+        - name: ADDRESS
+          value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /var/lib/csi/sockets/pluginproxy/
+
+      - name: csi-attacher
+        image: {{ .Values.sidecars.attacher.image }}
+        args:
+        - "--csi-address=$(ADDRESS)"
+        - "--v=5"
+        - "--timeout=120s"
+        - "--leader-election"
+        - "--reconcile-sync=30m"
+        env:
+        - name: ADDRESS
+          value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /var/lib/csi/sockets/pluginproxy/
+
+      - name: csi-resizer
+        image: {{ .Values.sidecars.resizer.image }}
+        args:
+        - "--csi-address=$(ADDRESS)"
+        - "--v=5"
+        - "--timeout=120s"
+        - "--leader-election"
+        - "--handle-volume-inuse-error=false"
+        env:
+        - name: ADDRESS
+          value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /var/lib/csi/sockets/pluginproxy/
+
+      - name: liveness-probe
+        image: {{ .Values.sidecars.livenessprobe.image }}
+        args:
+        - "--csi-address=$(ADDRESS)"
+        env:
+        - name: ADDRESS
+          value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /var/lib/csi/sockets/pluginproxy/
+
+      - name: csi-shared-lvm-controller-plugin
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /csi-shared-lvm
+        - controller
+        - --endpoint=$(CSI_ENDPOINT)
+        {{- with .Values.driver.allowedVolumeGroups }}
+        - --allowed-volume-groups={{ . }}
+        {{- end }}
+        env:
+        - name: CSI_ENDPOINT
+          value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /var/lib/csi/sockets/pluginproxy/
+        ports:
+        - containerPort: 9808
+          name: healthz
+          protocol: TCP
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 10
+          timeoutSeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: socket-dir
+        emptyDir: {}

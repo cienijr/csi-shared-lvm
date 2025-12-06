@@ -1,0 +1,6 @@
+apiVersion: v2
+name: csi-shared-lvm
+description: A Kubernetes CSI Driver for shared storage based on LVM
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
